@@ -18,4 +18,4 @@ jobs:
     - name: install dependencies
       run: (cd ui && npm install)
     - name: build website
-      run: (cd ui && build)
+      run: (cd ui && npm build)
