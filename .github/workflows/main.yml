@@ -16,6 +16,6 @@ jobs:
       with:
         node-version: "14.2.0"
     - name: install dependencies
-      run: (cd ui && npm ci)
+      run: (cd ui && npm install)
     - name: build website
       run: (cd ui && build)
