@@ -1,0 +1,296 @@
+#!/bin/bash
+
+PROJECT_ROOT="$( cd "$(dirname "$0")" ; pwd -P )/.."
+DEPLOYMENT_PATH_FROM_PROJECT_ROOT="deploy"
+DEPLOYMENT_DIRECTORY="${PROJECT_ROOT}/${DEPLOYMENT_PATH_FROM_PROJECT_ROOT}"
+. "${DEPLOYMENT_DIRECTORY}/lib/common.sh"
+
+
+# PARAMETERS
+function parse_common_parameters {
+    #TODO: remove hardcoded parameter
+    if [[ -z "${BYPASS_PROMPT}" ]]  ; then export BYPASS_PROMPT=0  ; fi
+    if [[ -z "${RUN_ON_HOST}" ]]    ; then export RUN_ON_HOST=0    ; fi
+    if [[ -z "${TERRAFORM_INFO}" ]] ; then export TERRAFORM_INFO=0 ; fi
+    if [[ -z "${QUIET}" ]]          ; then export QUIET=0          ; fi
+    if [[ -z "${DOCKER_QUIET}" ]]   ; then export DOCKER_QUIET=0   ; fi
+    if [[ -z "${VERBOSE}" ]]        ; then export VERBOSE=0        ; fi
+    if [[ -z "${NO_TTY}" ]]         ; then export NO_TTY=0         ; fi
+    if [[ -z "${FORCE_DOCKER}" ]]   ; then FORCE_DOCKER=0          ; fi
+
+    export XPARAMS=""
+    while [[ $# -gt 0 ]]; do
+        key="${1}"
+        case ${key} in
+            -k | --kind)
+                export DEPLOYMENT_KIND="${2}"
+                shift
+                shift
+                ;;
+            -e | --environment)
+                export ENVIRONMENT_ID="${2}"
+                shift
+                shift
+                ;;
+            -d | --deployment)
+                export DEPLOYMENT_ID="${2}"
+                shift
+                shift
+                ;;
+            -c | --command)
+                export DEPLOYER_COMMAND="${2}"
+                shift
+                shift
+                ;;
+            -b | --bypass_prompt)
+                export BYPASS_PROMPT=1
+                shift
+                ;;
+            -h | --host)
+                export RUN_ON_HOST=1
+                shift
+                ;;
+            --terraform_info)
+                export TERRAFORM_INFO=1
+                shift
+                ;;
+            -s|--service)
+                export SERVICE_ID="${2}"
+                shift
+                shift
+                ;;
+            --aws_access_key)
+                export AWS_ACCESS_KEY_ID="${2}"
+                shift
+                shift
+                ;;
+            --aws_secret_access_key)
+                export AWS_SECRET_ACCESS_KEY="${2}"
+                shift
+                shift
+                ;;
+            --aws_default_region)
+                export AWS_DEFAULT_REGION="${2}"
+                shift
+                shift
+                ;;
+            -p | --project_id)
+                export PROJECT_ID="${2}"
+                shift
+                shift
+                ;;
+            -x | --xparams)
+                shift
+                export XPARAMS="${@}"
+                shift
+                ;;
+            "${ARG_QUIET_SHORT}" | "${ARG_QUIET_LONG}")
+                export QUIET=1
+                shift
+                ;;
+            "${ARG_DOCKER_QUIET_SHORT}" | "${ARG_DOCKER_QUIET_LONG}")
+                export DOCKER_QUIET=1
+                shift
+                ;;
+            "${ARG_FORCE_DOCKER_LONG}")
+                export FORCE_DOCKER=1
+                shift
+                ;;
+            "${ARG_VERBOSE_SHORT}" | "${ARG_VERBOSE_LONG}")
+                export VERBOSE=1
+                shift
+                ;;
+            "${ARG_NO_TTY_LONG}")
+                export NO_TTY=1
+                shift
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+}
+function usage {
+    usage_kind
+    usage_command
+}
+function usage_kind {
+    if [ ! -e "${RESOURCE_PATH}/${kind}" ]; then
+        echo_red         "No kind have been defined, please install one"
+        exit 1
+    fi
+    if [[ "${DEPLOYMENT_KIND}" == "" ]];then
+        echo_red         "usage:"
+        echo             "     ${SCRIPT_NAME} -k <KIND> -c <COMMAND> [OPTIONS]"
+        echo
+
+        echo_cyan        "KIND (${ARG_KIND})"
+        for kind in $(ls "${RESOURCE_PATH}"); do
+            # SKIP UNWANTED
+            if [[ -e "${RESOURCE_PATH}/${kind}/deployer_ignore" ]]; then
+                continue
+            fi
+
+            # PRINT SUMMARY
+            echo_lightgreen "    ${kind}"
+            if [[ -e "${RESOURCE_PATH}/${kind}/definition" ]];then
+                while read data; do echo "        $data"; done < "${RESOURCE_PATH}/${kind}/definition"
+            else
+                echo "        TODO: no information defined for this kind of resource"
+            fi
+
+            # PRINT COMMANDS
+            local commands=$(get_kind_commands ${kind})
+            if [[ "${commands}" != "" ]]; then
+                echo -n "        --> "
+                for command in ${commands}; do
+                    echo -n "${command}, "
+                done
+                echo
+            fi
+        done
+
+        usage_options
+
+        # ERROR MESSAGE
+        echo_red         "No kind passed, please use -k <KIND>"
+        exit 1
+    fi
+}
+function usage_command {
+    assert_kind
+
+    local available_commands=$(get_kind_commands "${DEPLOYMENT_KIND}")
+
+    set +u
+    if [[ "${DEPLOYER_COMMAND}" == "" || ! " ${available_commands} " =~ " ${DEPLOYER_COMMAND} " ]]; then
+        echo -en "${LIGHT_YELLOW}${DEPLOYMENT_KIND} is a "
+        cat "${RESOURCE_PATH}/${DEPLOYMENT_KIND}/definition"
+        echo -e "${NO_COLOUR}"
+
+        echo_red         "usage:"
+        echo             "     ${SCRIPT_NAME} -k ${DEPLOYMENT_KIND} -c <COMMAND> [OPTIONS]"
+        echo
+        echo_cyan        "AVAILABLE COMMANDS (${ARG_COMMAND})"
+        for command in ${available_commands}; do
+            echo_lightmagento "    ${command}"
+        done
+
+        usage_options
+
+        # ERROR MESSAGE
+        if [[ "${DEPLOYER_COMMAND}" == "" ]]; then
+            echo_red     "No command passed, please use -c <COMMAND>"
+        else
+            echo_red     "unrecognised command ${DEPLOYER_COMMAND}"
+        fi
+
+        exit 1
+    fi
+
+    set -u
+}
+function usage_options {
+    echo
+    echo_cyan        "OPTIONS"
+    echo             "   ${ARG_BYPASS_PROMPT}  -  answer automatically yes to any prompt"
+    echo             "   ${ARG_HOST_MODE}           -  run the script directly on the host instead of wrapping it into docker"
+    echo             "                       -  you will need to have all dependencies installed on your machine."
+    echo             "   ${ARG_TERRAFORM_INFO}    -  add info messages to terraform"
+    echo             "   ${ARG_DOCKER_QUIET_SHORT}|${ARG_DOCKER_QUIET_LONG}  -  make docker build quiet"
+    echo             "   ${ARG_VERBOSE_SHORT}|${ARG_VERBOSE_LONG}        -  add more logging"
+    echo             "   ${ARG_FORCE_DOCKER_LONG}      -  force command to run in docker (useful on ci)"
+    echo
+}
+
+# DEPLOYER COMMANDS
+function execute_deployer_command {
+    assert_kind
+    command_to_execute=$(get_deployment_kind_path)/${DEPLOYER_COMMAND}.sh
+    if [[ -f "${command_to_execute}" ]]; then
+        ${command_to_execute} ${XPARAMS}
+    else
+        echo_red "No implementation of ${DEPLOYER_COMMAND} for kind ${DEPLOYMENT_KIND}"
+        exit 1
+    fi
+}
+
+# DOCKER
+REPOSITORY_PATH_IN_CONTAINER="/repository"
+function run_in_docker_if_required {
+    #TODO: this function is a bottleneck, using multiple builders probably makes sense
+    if [[ "${FORCE_DOCKER}" != 1 && -e /.dockerenv ]];then
+        # we are already in docker
+        return
+    fi
+
+    if [[ "${RUN_ON_HOST}" != 1 ]];then
+        echo_cyan "Script will be wrapped inside a docker container"
+        assert_dependencies docker
+        image_name="deployer"
+        docker_group_id=$(cut -d: -f3 < <(getent group docker))
+
+        echo -n "Building docker image with id: "
+        quiet=""
+        if [[ "${DOCKER_QUIET}" == 1 ]];then
+            quiet="-q"
+        fi
+
+        docker build                                     \
+            ${quiet}                                     \
+            --tag ${image_name}                          \
+            --build-arg USERTOADD=${USER}                \
+            --build-arg DOCKERGROUPID=${docker_group_id} \
+            ${RESOURCE_PATH}/image-deployer              \
+            || exit 1
+        echo ""
+
+        filtered_command_line="$(echo "${@}" | sed 's/--force_docker//g')"
+
+        echo_verbose "Wrapping in docker - command: ${filtered_command_line}"
+        (
+            cd "${PROJECT_ROOT}"
+
+            # These 2 lines of code let run the code in github actions runners
+            tty_interactive=$([ "${NO_TTY}" = 1 ]&&echo ""||echo "--tty --interactive")
+            docker_user=$([ "${GITHUB_ACTIONS}" = "true" ]&&echo ""||echo "--user ${USER}")
+
+            set +u
+            docker run                                                 \
+                ${tty_interactive}                                     \
+                --volume /$(pwd):${REPOSITORY_PATH_IN_CONTAINER}:rw    \
+                --env AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}"         \
+                --env AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}" \
+                --env AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION}"       \
+                --env PROJECT_ID="${PROJECT_ID}"                       \
+                --env DEPLOYMENT_ID="${DEPLOYMENT_ID}"                 \
+                --env ENVIRONMENT_ID="${ENVIRONMENT_ID}"               \
+                --volume ${HOME}/.docker:/home/${USER}/.docker         \
+                --volume /var/run/docker.sock:/var/run/docker.sock     \
+                --volume $(which docker):/usr/bin/docker               \
+                ${docker_user}                                         \
+                --label "kind=${DEPLOYMENT_KIND}"                      \
+                --label "command=${DEPLOYER_COMMAND}"                  \
+                ${image_name}                                          \
+                     ${REPOSITORY_PATH_IN_CONTAINER}/${DEPLOYMENT_PATH_FROM_PROJECT_ROOT}/${0} ${filtered_command_line}
+             set -u
+        )
+
+        exit $?
+    else
+        echo_cyan "Script will run without docker"
+    fi
+}
+
+# MAIN
+SCRIPT_NAME="do"
+start=$(date +%s)
+parse_common_parameters "${@}"
+usage
+set -euo pipefail
+run_in_docker_if_required "${@}"
+
+execute_deployer_command
+
+end=$(date +%s)
+echo_lightgreen "\nCommand elapsed time: $((end-start)) seconds"
