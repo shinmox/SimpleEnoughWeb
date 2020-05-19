@@ -218,7 +218,7 @@ function execute_deployer_command {
 # DOCKER
 REPOSITORY_PATH_IN_CONTAINER="/repository"
 function run_in_docker_if_required {
-    #TODO: this function is a bottleneck, using multiple builders probably makes sense
+    #TODO: this function is a bottleneck, using multiple builders probably makes sense. I presume it needs to be code triggered from kinds executors
     if [[ "${FORCE_DOCKER}" != 1 && -e /.dockerenv ]];then
         # we are already in docker
         return
@@ -258,6 +258,7 @@ function run_in_docker_if_required {
             set +u
             docker run                                                 \
                 ${tty_interactive}                                     \
+                ${docker_user}                                         \
                 --volume /$(pwd):${REPOSITORY_PATH_IN_CONTAINER}:rw    \
                 --env AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}"         \
                 --env AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}" \
@@ -268,7 +269,6 @@ function run_in_docker_if_required {
                 --volume ${HOME}/.docker:/home/${USER}/.docker         \
                 --volume /var/run/docker.sock:/var/run/docker.sock     \
                 --volume $(which docker):/usr/bin/docker               \
-                ${docker_user}                                         \
                 --label "kind=${DEPLOYMENT_KIND}"                      \
                 --label "command=${DEPLOYER_COMMAND}"                  \
                 ${image_name}                                          \
